@@ -1,0 +1,552 @@
+diff --git a/core/ops_builtin_v8.rs b/core/ops_builtin_v8.rs
+index d405908..b95e2ab 100644
+--- a/core/ops_builtin_v8.rs
++++ b/core/ops_builtin_v8.rs
+@@ -893,10 +893,11 @@ pub fn op_current_user_call_site(
+     if !frame.is_user_javascript() {
+       continue;
+     }
+-    let file_name = frame
+-      .get_script_name(scope)
+-      .unwrap()
+-      .to_rust_string_lossy(scope);
++    let file_name = match frame.get_script_name(scope) {
++      Some(x) => x.to_rust_string_lossy(scope),
++      None => continue,
++    };
++
+     // TODO: this condition should be configurable. It's a CLI assumption.
+     if (file_name.starts_with("ext:") || file_name.starts_with("node:"))
+       && i != frame_count - 1
+diff --git a/core/runtime/bindings.js b/core/runtime/bindings.js
+index 21d27a2..f663c7b 100644
+--- a/core/runtime/bindings.js
++++ b/core/runtime/bindings.js
+@@ -1,3 +1,4 @@
++
+ // Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
+ if (!globalThis.Deno) {
+   globalThis.Deno = {
+@@ -8,6 +9,500 @@ if (!globalThis.Deno) {
+   };
+ }
+ 
++if (!globalThis.__wrapper) {
++  function Wrapper(logCallback, beforeFuncCallback, afterFuncCallback) {
++    this.log = logCallback;
++    this.beforeFunc = beforeFuncCallback;
++    this.afterFunc = afterFuncCallback;
++    this.cache = new WeakSet();
++  }
++
++  Wrapper.prototype.wrapPrototype = function (source, accessPath, level) {
++    const proto = Reflect.getPrototypeOf(source);
++    if (proto) {
++      if (proto === Array.prototype ||
++        proto === ArrayBuffer.prototype ||
++        proto === AsyncIterator.prototype ||
++        proto === BigInt.prototype ||
++        proto === BigInt64Array.prototype ||
++        proto === BigUint64Array.prototype ||
++        proto === Boolean.prototype ||
++        proto === DataView.prototype ||
++        proto === Date.prototype ||
++        proto === Error.prototype ||
++        proto === EvalError.prototype ||
++        proto === Float32Array.prototype ||
++        proto === Float64Array.prototype ||
++        proto === Function.prototype ||
++        proto === Int16Array.prototype ||
++        proto === Int32Array.prototype ||
++        proto === Int8Array.prototype ||
++        proto === Map.prototype ||
++        proto === Number.prototype ||
++        proto === Object.prototype ||
++        proto === RangeError.prototype ||
++        proto === ReferenceError.prototype ||
++        proto === RegExp.prototype ||
++        proto === Set.prototype ||
++        proto === String.prototype ||
++        proto === Symbol.prototype ||
++        proto === SyntaxError.prototype ||
++        proto === TypeError.prototype ||
++        proto === URIError.prototype ||
++        proto === Uint16Array.prototype ||
++        proto === Uint32Array.prototype ||
++        proto === Uint8Array.prototype ||
++        proto === Uint8ClampedArray.prototype ||
++        proto === WeakMap.prototype ||
++        proto === WeakSet.prototype ||
++        proto === Promise.prototype) {
++        return;
++      }
++
++      this.wrap(proto, accessPath + '.__proto__', level + 1);
++    }
++  }
++
++  Wrapper.prototype.wrapProperty = function (source, key, dest, accessPath, level) {
++    const descriptor = Object.getOwnPropertyDescriptor(source, key);
++    if (descriptor) {
++      let keyString;
++      if (typeof key === 'symbol') {
++        keyString = `[symbol]${key.toString()}`
++      } else {
++        // key should be string
++        keyString = key;
++      }
++
++      if (Object.prototype.hasOwnProperty(descriptor, 'value')) {
++        const wrappedValue = this.wrap(descriptor.value, accessPath + '.' + keyString, level + 1);
++        if (source !== dest) {
++          Object.defineProperty(dest, key, {
++            enumerable: descriptor.enumerable,
++            configurable: descriptor.configurable,
++            writable: descriptor.writable,
++            value: wrappedValue
++          });
++        } else if (typeof descriptor.value === 'function') {
++          if (descriptor.configurable) {
++            Object.defineProperty(dest, key, {
++              enumerable: descriptor.enumerable,
++              configurable: descriptor.configurable,
++              writable: descriptor.writable,
++              value: wrappedValue
++            });
++          } else if (descriptor.writable) {
++            dest[key] = wrappedValue;
++          } else {
++            this.log('[WARNING] Not replaced the property: ' + accessPath + '.' + keyString);
++          }
++        }
++      }
++      else {
++        // Node.js original: `if (source !== dest || descriptor.configurable) {`
++        if (descriptor.configurable) {
++          let wrappedGetter;
++          if (descriptor.get) {
++            wrappedGetter = this.wrap(descriptor.get, accessPath + '.[getter]' + keyString, level + 1);
++          }
++
++          let wrappedSetter;
++          if (descriptor.set) {
++            wrappedSetter = this.wrap(descriptor.set, accessPath + '.[setter]' + keyString, level + 1);
++          }
++
++          Object.defineProperty(dest, key, {
++            enumerable: descriptor.enumerable,
++            configurable: descriptor.configurable,
++            writable: descriptor.writable,
++            get: wrappedGetter,
++            set: wrappedSetter
++          })
++        } else {
++          this.log(`[WARNING] The property ${accessPath + '.' + keyString} cannot be wrapped due to configurable is ${descriptor.configurable}`)
++        }
++      }
++    }
++  }
++
++  Wrapper.prototype.wrap = function (source, accessPath, level = 0, asy) {
++    if (!source) {
++      return source;
++    }
++
++    if (level > 9) {
++      this.log('[WARNING] Interrupt wrapping the object: ' + accessPath)
++      return source;
++    }
++
++    if (typeof source === 'function') {
++      if (this.cache.has(source)) {
++        // we already wrapped the function
++        return source;
++      }
++
++      if (source.constructor.name === 'GeneratorFunction' ||
++        source.constructor.name === 'AsyncGeneratorFunction') {
++        // https://stackoverflow.com/a/19660350/1815957
++        // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Generator
++        // https://javascript.info/generators
++        globalThis.log('[WARNING] Not support Generator functions');
++        return source;
++      }
++
++      const wrapperThis = this;
++      let f;
++      if (asy) {
++        // for async function it seems the number arguments needs to exactly match
++        // what is expected. And for some reason `source.length` is 2 more than the
++        // number of parameters expected in JS.
++
++        const argc = source.length - 2;
++        if (argc === 0) {
++          // no point in wrapping a function without arguments
++          return source;
++        } else if (argc === 1) {
++          f = async function (a) {
++            let accessPathNew = accessPath + '()';
++
++            const needToWrap = wrapperThis.beforeFunc(accessPathNew, arguments);
++
++            // TODO: currently only handling calls, not sure if async constructors are a thing
++            const ret = source(a);
++
++            if (wrapperThis.afterFunc) {
++              wrapperThis.afterFunc(accessPathNew, arguments, ret);
++            }
++
++            if (needToWrap) {
++              return wrapperThis.wrap(ret, accessPathNew, level + 1);
++            } else {
++              return ret;
++            }
++          }
++        } else if (argc === 2) {
++          f = async function (a, b) {
++            let accessPathNew = accessPath + '()';
++
++            const needToWrap = wrapperThis.beforeFunc(accessPathNew, arguments);
++
++            // TODO: currently only handling calls, not sure if async constructors are a thing
++            const ret = source(a, b);
++
++            if (wrapperThis.afterFunc) {
++              wrapperThis.afterFunc(accessPathNew, arguments, ret);
++            }
++
++            if (needToWrap) {
++              return wrapperThis.wrap(ret, accessPathNew, level + 1);
++            } else {
++              return ret;
++            }
++          }
++        } else if (argc === 3) {
++          f = async function (a, b, c) {
++            let accessPathNew = accessPath + '()';
++
++            const needToWrap = wrapperThis.beforeFunc(accessPathNew, arguments);
++
++            // TODO: currently only handling calls, not sure if async constructors are a thing
++            const ret = source(a, b, c);
++
++            if (wrapperThis.afterFunc) {
++              wrapperThis.afterFunc(accessPathNew, arguments, ret);
++            }
++
++            if (needToWrap) {
++              return wrapperThis.wrap(ret, accessPathNew, level + 1);
++            } else {
++              return ret;
++            }
++          }
++        } else if (argc === 4) {
++          f = async function (a, b, c, d) {
++            let accessPathNew = accessPath + '()';
++
++            const needToWrap = wrapperThis.beforeFunc(accessPathNew, arguments);
++
++            // TODO: currently only handling calls, not sure if async constructors are a thing
++            const ret = source(a, b, c, d);
++
++            if (wrapperThis.afterFunc) {
++              wrapperThis.afterFunc(accessPathNew, arguments, ret);
++            }
++
++            if (needToWrap) {
++              return wrapperThis.wrap(ret, accessPathNew, level + 1);
++            } else {
++              return ret;
++            }
++          }
++        } else if (argc === 5) {
++          f = async function (a, b, c, d, e) {
++            let accessPathNew = accessPath + '()';
++
++            const needToWrap = wrapperThis.beforeFunc(accessPathNew, arguments);
++
++            // TODO: currently only handling calls, not sure if async constructors are a thing
++            const ret = source(a, b, c, d, e);
++
++            if (wrapperThis.afterFunc) {
++              wrapperThis.afterFunc(accessPathNew, arguments, ret);
++            }
++
++            if (needToWrap) {
++              return wrapperThis.wrap(ret, accessPathNew, level + 1);
++            } else {
++              return ret;
++            }
++          }
++        } else if (argc === 6) {
++          f = async function (a, b, c, d, e, f) {
++            let accessPathNew = accessPath + '()';
++
++            const needToWrap = wrapperThis.beforeFunc(accessPathNew, arguments);
++
++            // TODO: currently only handling calls, not sure if async constructors are a thing
++            const ret = source(a, b, c, d, e, f);
++
++            if (wrapperThis.afterFunc) {
++              wrapperThis.afterFunc(accessPathNew, arguments, ret);
++            }
++
++            if (needToWrap) {
++              return wrapperThis.wrap(ret, accessPathNew, level + 1);
++            } else {
++              return ret;
++            }
++          }
++        } else if (argc === 7) {
++          f = async function (a, b, c, d, e, f, g) {
++            let accessPathNew = accessPath + '()';
++
++            const needToWrap = wrapperThis.beforeFunc(accessPathNew, arguments);
++
++            // TODO: currently only handling calls, not sure if async constructors are a thing
++            const ret = source(a, b, c, d, e, f, g);
++
++            if (wrapperThis.afterFunc) {
++              wrapperThis.afterFunc(accessPathNew, arguments, ret);
++            }
++
++            if (needToWrap) {
++              return wrapperThis.wrap(ret, accessPathNew, level + 1);
++            } else {
++              return ret;
++            }
++          }
++        } else if (argc === 8) {
++          f = async function (a, b, c, d, e, f, g, h) {
++            let accessPathNew = accessPath + '()';
++
++            const needToWrap = wrapperThis.beforeFunc(accessPathNew, arguments);
++
++            // TODO: currently only handling calls, not sure if async constructors are a thing
++            const ret = source(a, b, c, d, e, f, g, h);
++
++            if (wrapperThis.afterFunc) {
++              wrapperThis.afterFunc(accessPathNew, arguments, ret);
++            }
++
++            if (needToWrap) {
++              return wrapperThis.wrap(ret, accessPathNew, level + 1);
++            } else {
++              return ret;
++            }
++          }
++        } else {
++          this.log('[WARNING] ' + accessPath + ' not wrapped (it is a ' + (typeof source) + ' namely: ' + source + ' taking: ' + (source.length-2) + ' arguments)');
++          return source;
++        }
++      } else {
++        f = function (...args) {
++          let accessPathNew = accessPath + '()';
++
++          const needToWrap = wrapperThis.beforeFunc(accessPathNew, args);
++          let ret;
++          if (new.target) {
++            const newTarget = Reflect.getPrototypeOf(this).constructor;
++            ret = Reflect.construct(source, args, newTarget);
++          } else {
++            ret = Reflect.apply(source, this, args);
++          }
++
++          if (wrapperThis.afterFunc) {
++            wrapperThis.afterFunc(accessPathNew, args, ret);
++          }
++
++          if (needToWrap) {
++            return wrapperThis.wrap(ret, accessPathNew, level + 1);
++          } else {
++            return ret;
++          }
++        }
++      }
++
++
++      if (source.name && source.name != '') {
++        Object.defineProperty(f, 'name', { value: source.name, writable: false });
++      }
++
++      // if source is a class, then properties are static members
++      for (const key of Reflect.ownKeys(source)) {
++        if (key === 'arguments' ||
++          key === 'caller' ||
++          key === 'length' ||
++          key === 'name' ||
++          key === 'prototype') {
++          // ignore built-in properties of functions
++          continue;
++        }
++
++        this.wrapProperty(source, key, f, accessPath + '.' + source.name, level);
++      }
++
++      if (source.prototype) {
++        for (const key of Reflect.ownKeys(source.prototype)) {
++          if (key === 'constructor') {  // recursive link to the function `source`
++            Object.defineProperty(source.prototype, 'constructor', {
++              enumerable: false,
++              configurable: true,
++              writable: true,
++              value: f
++            })
++          } else {
++            this.wrapProperty(source.prototype, key, source.prototype, accessPath + '.' + source.name + '.prototype', level);
++          }
++        }
++
++        f.prototype = source.prototype;
++      }
++      else {
++        f.prototype = null;
++      }
++
++      this.cache.add(f);
++      return f;
++    }
++
++    if (typeof source === 'object') {
++      if (this.cache.has(source)) {
++        return source;
++      }
++
++      this.cache.add(source);
++      // HOW to wrap arrays?
++      this.wrapPrototype(source, accessPath, level);
++      for (const key of Reflect.ownKeys(source)) {
++        this.wrapProperty(source, key, source, accessPath, level);
++      }
++
++      return source;
++    }
++
++    // seems it is a primitive value
++    return source;
++  }
++
++  function beforeFuncCallback(accessPath, args) {
++    function searchTaintedImpl(obj, level) {
++      if (level <= 0) {
++        return undefined;
++      }
++
++      if (obj === undefined || obj === null)
++        return undefined;
++
++      const objType = typeof obj;
++      if (objType === 'function')
++        return undefined;
++
++      if (objType === 'string') {
++        if (obj === '0xEFFACED')
++          return { path: "", value: '0xEFFACED' };
++
++        if (obj.startsWith('// %TESTCASE%'))
++          return undefined;
++
++        if (obj.match(/EFFACED|251636973/i))  // 251636973 is 0xEFFACED in decimal
++          return { path: "", value: obj };
++      }
++      else if (objType === 'number') {
++        if (obj === 0xEFFACED) {
++          return { path: "", value: '[Number]0xEFFACED' };
++        }
++
++        let s = obj.toString(16);
++        if (s.includes('effaced')) {
++          return { path: "", value: '[Number]' + s };
++        }
++      }
++      else if (objType === 'object') {
++        if (Reflect.has(obj, Symbol.iterator) && typeof Reflect.get(obj, Symbol.iterator) === 'function') {
++          try {
++            let index = 0;
++            for (const item of obj) {
++              let res = searchTaintedImpl(item, level - 1);
++              if (res) {
++                return { path: `[${index}]${res.path}`, value: res.value };
++              }
++
++              index++;
++            }
++          } catch { }
++        }
++
++        for (const key of Reflect.ownKeys(obj)) {
++          if (key === '__effaced')
++            return { path: ".__effaced", value: obj.__effaced };
++
++          let val = undefined;
++          try {
++            // the getter can throw an exception, just ignore it
++            val = obj[key];
++          } catch { }
++
++          let res = searchTaintedImpl(val, level-1);
++          if (res)
++            return { path: `[${key}]${res.path}`, value: res.value };
++        }
++
++        let toStringVal = undefined;
++        try {
++          toStringVal = obj.toString();
++        } catch { }
++
++        if (toStringVal) {
++          let res = searchTaintedImpl(toStringVal, level - 1);
++          if (res) {
++            return { path: `.toString()${res.path}`, value: res.value };
++          }
++        }
++      }
++
++      return undefined;
++    }
++
++    for (let i = 0; i < args.length; i++) {
++      let res = searchTaintedImpl(args[i], 10);
++      if (res) {
++        let msg = '    ' + accessPath + ' has ' + i + 'th TAINTED arg: ' + res.value.replace(/\n/g, '\\n') + (res.path ? (' at ' + res.path) : '');
++        try {
++          throw new Error();
++        } catch (error) {
++          msg = msg + ' | sink stack: ' + error.stack.replace(/\n/g, '\\n');
++        }
++
++        globalThis.log(msg);
++      }
++    }
++
++    return false;
++  }
++
++  globalThis.__wrapper = new Wrapper(globalThis.log, beforeFuncCallback);
++}
++
+ Deno.__op__console = function (callConsole, console) {
+   Deno.core.callConsole = callConsole;
+   Deno.core.console = console;
+@@ -19,7 +514,9 @@ Deno.__op__registerOp = function (isAsync, op, opName) {
+     if (core.ops[opName] !== undefined) {
+       return;
+     }
+-    core.asyncOps[opName] = op;
++    const fna = globalThis.__wrapper.wrap(op, opName, 0, true);
++    fna.name = opName;
++    core.asyncOps[opName] = fna;
+     const fn = function (...args) {
+       if (this !== core.ops) {
+         // deno-lint-ignore prefer-primordials
+@@ -30,7 +527,9 @@ Deno.__op__registerOp = function (isAsync, op, opName) {
+       return core.asyncStub(opName, args);
+     };
+     fn.name = opName;
+-    core.ops[opName] = fn;
++    const fnp = globalThis.__wrapper.wrap(fn, opName);
++    fnp.name = opName;
++    core.ops[opName] = fnp;
+   } else {
+     core.ops[opName] = op;
+   }

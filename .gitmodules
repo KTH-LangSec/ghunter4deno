@@ -1,0 +1,12 @@
+[submodule "rusty_v8"]
+	path = rusty_v8
+	url = https://github.com/denoland/rusty_v8.git
+[submodule "deno_core"]
+	path = deno_core
+	url = https://github.com/denoland/deno_core.git
+[submodule "deno"]
+	path = deno
+	url = https://github.com/denoland/deno.git
+[submodule "deno_std"]
+	path = deno_std
+	url = https://github.com/denoland/deno_std.git

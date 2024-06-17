@@ -1,0 +1,13 @@
+.vscode/
+.idea/
+
+# analysis
+_aggregate/
+_analysis*/
+.build
+*.log
+*.sarif
+
+# deno tests
+lorem_ipsum.txt*
+test_log.file

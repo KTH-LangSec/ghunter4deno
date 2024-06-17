@@ -1,0 +1,215 @@
+{
+  "version": "2.1.0",
+  "$schema": "http://json.schemastore.org/sarif-2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "ghunter4deno",
+          "informationUri": "https://github.com/KTH-LangSec/ghunter4deno",
+          "version": "0.1.1",
+          "rules": [
+            {
+              "id": "binding",
+              "name": "Polluted binding value",
+              "shortDescription": {
+                "text": "Pollutable property reaches binding call"
+              }
+            },
+            {
+              "id": "oom",
+              "name": "Polluting causes out of memory",
+              "shortDescription": {
+                "text": "Pollutable property causes the program to run out of memory"
+              }
+            },
+            {
+              "id": "panic",
+              "name": "Polluting causes panic",
+              "shortDescription": {
+                "text": "Pollutable property causes a panic"
+              }
+            },
+            {
+              "id": "timeout",
+              "name": "Polluting causes timeout",
+              "shortDescription": {
+                "text": "Pollutable property causes a timeout"
+              }
+            },
+            {
+              "id": "unexpected",
+              "name": "Polluting causes unknown unexpected error",
+              "shortDescription": {
+                "text": "Pollutable property causes an unknown unexpected error"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "level": "error",
+          "ruleId": "unexpected",
+          "message": {
+            "text": "Polluting property \"SIGUSR1\" in \"deno/cli/tests/unit/signal_test.ts\" causes an unknown unexpected error.\n\nSTDOUT:\n---------------------------------\nrunning 8 tests from ./deno/cli/tests/unit/signal_SIGUSR1_analysis_test.ts\nsignalsNotImplemented ... ignored (0ms)\nsignalListenerTest ... FAILED (12ms)\nmultipleSignalListenerTest ...\n---------------------------------\n\nSTDERR:\n---------------------------------\n\n\n---------------------------------"
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno_std/archive/untar_test.ts\" timed out with polluted property \"size\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno_std/http/server_test.ts\" timed out with polluted property \"protocol\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno_std/io/buf_writer_test.ts\" timed out with polluted property \"size\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno_std/streams/text_line_stream_test.ts\" timed out with polluted property \"0\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno_std/yaml/stringify_test.ts\" timed out with polluted property \"indent\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno/cli/tests/unit_node/_fs/_fs_appendFile_test.ts\" timed out with polluted property \"length\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno/cli/tests/unit_node/_fs/_fs_appendFile_test.ts\" timed out with polluted property \"offset\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno/cli/tests/unit_node/_fs/_fs_writeFile_test.ts\" timed out with polluted property \"length\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno/cli/tests/unit_node/_fs/_fs_writeFile_test.ts\" timed out with polluted property \"offset\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno/cli/tests/unit_node/crypto/crypto_key_test.ts\" timed out with polluted property \"____FORIN\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno/cli/tests/unit_node/crypto/crypto_key_test.ts\" timed out with polluted property \"0\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno/cli/tests/unit_node/crypto/crypto_key_test.ts\" timed out with polluted property \"bubbles\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno/cli/tests/unit_node/crypto/crypto_key_test.ts\" timed out with polluted property \"cancelable\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno/cli/tests/unit_node/crypto/crypto_key_test.ts\" timed out with polluted property \"composed\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno/cli/tests/unit/console_test.ts\" timed out with polluted property \"iterableLimit\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno/cli/tests/unit/fetch_test.ts\" timed out with polluted property \"?\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno/cli/tests/unit/http_test.ts\" timed out with polluted property \"run\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno/cli/tests/unit/serve_test.ts\" timed out with polluted property \"method\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno/cli/tests/unit/streams_test.ts\" timed out with polluted property \"0\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno/cli/tests/unit/streams_test.ts\" timed out with polluted property \"preventAbort\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "timeout",
+          "message": {
+            "text": "Test \"deno/cli/tests/unit/streams_test.ts\" timed out with polluted property \"preventClose\"."
+          }
+        },
+        {
+          "level": "error",
+          "ruleId": "panic",
+          "message": {
+            "text": "Unexpected crash in \"deno/cli/tests/unit_node/zlib_test.ts\" with polluted property \"params\".\n\nSTDOUT:\n---------------------------------\nrunning 4 tests from ./deno/cli/tests/unit_node/zlib_params_analysis_test.ts\nbrotli compression sync ... ok (12ms)\nbrotli compression ...\n---------------------------------\n\nSTDERR:\n---------------------------------\n\n============================================================\nDeno has panicked. This is a bug in Deno. Please report this\nat https://github.com/denoland/deno/issues/new.\nIf you can reliably reproduce this panic, include the\nreproduction steps and re-run with the RUST_BACKTRACE=1 env\nvar set and include the backtrace in your report.\n\nPlatform: linux x86_64\nVersion: 1.37.2\nArgs: [\"./deno/target/debug/deno\", \"test\", \"--no-check\", \"--allow-all\", \"--unstable\", \"--location=http://js-unit-tests/foo/bar\", \"--no-prompt\", \"deno/cli/tests/unit_node/zlib_params_analysis_test.ts\"]\n\nthread 'tokio-runtime-worker' panicked at /src/deno_core/serde_v8/de.rs:268:61:\ncalled `Result::unwrap()` on an `Err` value: BadType { actual: \"v8::data::Value\", expected: \"v8::data::Object\" }\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\n---------------------------------"
+          }
+        }
+      ]
+    }
+  ]
+}

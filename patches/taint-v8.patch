@@ -1,0 +1,632 @@
+diff --git a/src/builtins/builtins-definitions.h b/src/builtins/builtins-definitions.h
+index 18da8a651b..95b461fa10 100644
+--- a/src/builtins/builtins-definitions.h
++++ b/src/builtins/builtins-definitions.h
+@@ -634,6 +634,7 @@ namespace internal {
+   CPP(GlobalEscape)                                                            \
+   CPP(GlobalUnescape)                                                          \
+   CPP(GlobalEval)                                                              \
++  CPP(GlobalLog)                                                               \
+   /* ES6 #sec-isfinite-number */                                               \
+   TFJ(GlobalIsFinite, kJSArgcReceiverSlots + 1, kReceiver, kNumber)            \
+   /* ES6 #sec-isnan-number */                                                  \
+diff --git a/src/builtins/builtins-global.cc b/src/builtins/builtins-global.cc
+index 137f7f3402..d426a13d12 100644
+--- a/src/builtins/builtins-global.cc
++++ b/src/builtins/builtins-global.cc
+@@ -112,5 +112,29 @@ BUILTIN(GlobalEval) {
+       Execution::Call(isolate, function, target_global_proxy, 0, nullptr));
+ }
+
++// log info about tained data from JS
++BUILTIN(GlobalLog) {
++  HandleScope scope(isolate);
++  Handle<String> str;
++  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
++      isolate, str,
++      Object::ToString(isolate, args.atOrUndefined(isolate, 1)));
++
++  {
++    str = i::String::Flatten(isolate, str);
++    int length = str->length();
++    uint8_t* message = new uint8_t[length + 1];
++    i::String::WriteToFlat(*str, message, 0, length);
++    message[length] = '\0';
++
++    // LOG!!!
++    FuzzStream os;
++    os << "[From JS] " << (char*)message << "\n";
++    delete[] message;
++  }
++
++  return ReadOnlyRoots(isolate).undefined_value();
++}
++
+ }  // namespace internal
+ }  // namespace v8
+diff --git a/src/codegen/compiler.cc b/src/codegen/compiler.cc
+index 3204e37c88..6cdda440c4 100644
+--- a/src/codegen/compiler.cc
++++ b/src/codegen/compiler.cc
+@@ -14,6 +14,7 @@
+ #include "src/base/logging.h"
+ #include "src/base/optional.h"
+ #include "src/base/platform/time.h"
++#include "src/base/strings.h"
+ #include "src/baseline/baseline.h"
+ #include "src/codegen/assembler-inl.h"
+ #include "src/codegen/compilation-cache.h"
+@@ -2864,6 +2865,12 @@ MaybeHandle<JSFunction> Compiler::GetFunctionFromEval(
+     ParseRestriction restriction, int parameters_end_pos,
+     int eval_scope_position, int eval_position,
+     ParsingWhileDebugging parsing_while_debugging) {
++  if (strcasestr(source->ToCString().get(), "0xEFFACED")) {
++    // LOG!!!
++    FuzzStream os;
++    os << "EVAL!!!\n";
++  }
++
+   Isolate* isolate = context->GetIsolate();
+
+   // The cache lookup key needs to be aware of the separation between the
+diff --git a/src/ic/accessor-assembler.cc b/src/ic/accessor-assembler.cc
+index 7f83c0f6c6..b173d5b11d 100644
+--- a/src/ic/accessor-assembler.cc
++++ b/src/ic/accessor-assembler.cc
+@@ -3220,19 +3220,19 @@ void AccessorAssembler::LoadIC_NoFeedback(const LoadICParameters* p,
+   {
+     // Special case for Function.prototype load, because it's very common
+     // for ICs that are only executed once (MyFunc.prototype.foo = ...).
+-    Label not_function_prototype(this, Label::kDeferred);
+-    GotoIfNot(IsJSFunctionInstanceType(instance_type), &not_function_prototype);
+-    GotoIfNot(IsPrototypeString(p->name()), &not_function_prototype);
++    //Label not_function_prototype(this, Label::kDeferred);
++    GotoIfNot(IsJSFunctionInstanceType(instance_type), &miss);//&not_function_prototype);
++    GotoIfNot(IsPrototypeString(p->name()), &miss);//&not_function_prototype);
+
+     GotoIfPrototypeRequiresRuntimeLookup(CAST(lookup_start_object),
+                                          lookup_start_object_map,
+-                                         &not_function_prototype);
++                                         &miss);//&not_function_prototype);
+     Return(LoadJSFunctionPrototype(CAST(lookup_start_object), &miss));
+-    BIND(&not_function_prototype);
++    //BIND(&not_function_prototype);
+   }
+
+-  GenericPropertyLoad(CAST(lookup_start_object), lookup_start_object_map,
+-                      instance_type, p, &miss, kDontUseStubCache);
++  // GenericPropertyLoad(CAST(lookup_start_object), lookup_start_object_map,
++  //                     instance_type, p, &miss, kDontUseStubCache);
+
+   BIND(&miss);
+   {
+@@ -3441,119 +3441,8 @@ void AccessorAssembler::KeyedLoadIC(const LoadICParameters* p,
+   ExitPoint direct_exit(this);
+
+   TVARIABLE(MaybeObject, var_handler);
+-  Label if_handler(this, &var_handler), try_polymorphic(this, Label::kDeferred),
+-      try_megamorphic(this, Label::kDeferred),
+-      try_uninitialized(this, Label::kDeferred),
+-      try_polymorphic_name(this, Label::kDeferred),
+-      miss(this, Label::kDeferred), generic(this, Label::kDeferred);
+-
+-  TNode<Map> lookup_start_object_map =
+-      LoadReceiverMap(p->receiver_and_lookup_start_object());
+-  GotoIf(IsDeprecatedMap(lookup_start_object_map), &miss);
+-
+-  GotoIf(IsUndefined(p->vector()), &generic);
+-
+-  // Check monomorphic case.
+-  TNode<HeapObjectReference> weak_lookup_start_object_map =
+-      MakeWeak(lookup_start_object_map);
+-  TNode<HeapObjectReference> feedback = TryMonomorphicCase(
+-      p->slot(), CAST(p->vector()), weak_lookup_start_object_map, &if_handler,
+-      &var_handler, &try_polymorphic);
+-  BIND(&if_handler);
+-  {
+-    LazyLoadICParameters lazy_p(p);
+-    HandleLoadICHandlerCase(
+-        &lazy_p, var_handler.value(), &miss, &direct_exit, ICMode::kNonGlobalIC,
+-        OnNonExistent::kReturnUndefined, kSupportElements, access_mode);
+-  }
+-
+-  BIND(&try_polymorphic);
+-  TNode<HeapObject> strong_feedback = GetHeapObjectIfStrong(feedback, &miss);
+-  {
+-    // Check polymorphic case.
+-    Comment("KeyedLoadIC_try_polymorphic");
+-    GotoIfNot(IsWeakFixedArrayMap(LoadMap(strong_feedback)), &try_megamorphic);
+-    HandlePolymorphicCase(weak_lookup_start_object_map, CAST(strong_feedback),
+-                          &if_handler, &var_handler, &miss);
+-  }
+-
+-  BIND(&try_megamorphic);
+-  {
+-    // Check megamorphic case.
+-    Comment("KeyedLoadIC_try_megamorphic");
+-    Branch(TaggedEqual(strong_feedback, MegamorphicSymbolConstant()), &generic,
+-           &try_uninitialized);
+-  }
+-
+-  BIND(&generic);
+-  {
+-    // TODO(jkummerow): Inline this? Or some of it?
+-    TailCallBuiltin(
+-        access_mode == LoadAccessMode::kLoad ? Builtin::kKeyedLoadIC_Megamorphic
+-                                             : Builtin::kKeyedHasIC_Megamorphic,
+-        p->context(), p->receiver(), p->name(), p->slot(), p->vector());
+-  }
+-
+-  BIND(&try_uninitialized);
+-  {
+-    // Check uninitialized case.
+-    Comment("KeyedLoadIC_try_uninitialized");
+-    Branch(TaggedEqual(strong_feedback, UninitializedSymbolConstant()), &miss,
+-           &try_polymorphic_name);
+-  }
+-
+-  BIND(&try_polymorphic_name);
+-  {
+-    // We might have a name in feedback, and a weak fixed array in the next
+-    // slot.
+-    Comment("KeyedLoadIC_try_polymorphic_name");
+-    TVARIABLE(Name, var_name);
+-    Label if_polymorphic_name(this), feedback_matches(this),
+-        if_internalized(this), if_notinternalized(this, Label::kDeferred);
+-
+-    // Fast-case: The recorded {feedback} matches the {name}.
+-    GotoIf(TaggedEqual(strong_feedback, p->name()), &feedback_matches);
+-
+-    {
+-      // Try to internalize the {name} if it isn't already.
+-      TVARIABLE(IntPtrT, var_index);
+-      TryToName(p->name(), &miss, &var_index, &if_internalized, &var_name,
+-                &miss, &if_notinternalized);
+-    }
+
+-    BIND(&if_internalized);
+-    {
+-      // The {var_name} now contains a unique name.
+-      Branch(TaggedEqual(strong_feedback, var_name.value()),
+-             &if_polymorphic_name, &miss);
+-    }
+-
+-    BIND(&if_notinternalized);
+-    {
+-      TVARIABLE(IntPtrT, var_index);
+-      TryInternalizeString(CAST(p->name()), &miss, &var_index, &if_internalized,
+-                           &var_name, &miss, &miss);
+-    }
+-
+-    BIND(&feedback_matches);
+-    {
+-      var_name = CAST(p->name());
+-      Goto(&if_polymorphic_name);
+-    }
+-
+-    BIND(&if_polymorphic_name);
+-    {
+-      // If the name comparison succeeded, we know we have a weak fixed array
+-      // with at least one map/handler pair.
+-      TailCallBuiltin(access_mode == LoadAccessMode::kLoad
+-                          ? Builtin::kKeyedLoadIC_PolymorphicName
+-                          : Builtin::kKeyedHasIC_PolymorphicName,
+-                      p->context(), p->receiver(), var_name.value(), p->slot(),
+-                      p->vector());
+-    }
+-  }
+-
+-  BIND(&miss);
++  //BIND(&miss);
+   {
+     Comment("KeyedLoadIC_miss");
+     TailCallRuntime(
+diff --git a/src/ic/ic.cc b/src/ic/ic.cc
+index 630f4db9c8..afc2dc8010 100644
+--- a/src/ic/ic.cc
++++ b/src/ic/ic.cc
+@@ -401,6 +401,8 @@ void IC::ConfigureVectorState(
+ MaybeHandle<Object> LoadIC::Load(Handle<Object> object, Handle<Name> name,
+                                  bool update_feedback,
+                                  Handle<Object> receiver) {
++  // FuzzStream os;
++  // os << "[LoadIC::Load]: " << name << "\n";
+   bool use_ic = (state() != NO_FEEDBACK) && v8_flags.use_ic && update_feedback;
+
+   if (receiver.is_null()) {
+@@ -450,6 +452,13 @@ MaybeHandle<Object> LoadIC::Load(Handle<Object> object, Handle<Name> name,
+   // Named lookup in the object.
+   LookupForRead(&it, IsAnyHas());
+
++  if (!it.IsFound() && it.CheckedPrototype()) {
++    // Changed by mshc
++    // LOG!!!
++    FuzzStream os;
++    os << "[LoadIC::Load] NOT FOUND: " << name << "\n";
++  }
++
+   if (it.IsFound() || !ShouldThrowReferenceError()) {
+     // Update inline cache and stub cache.
+     if (use_ic) {
+@@ -485,6 +494,9 @@ MaybeHandle<Object> LoadGlobalIC::Load(Handle<Name> name,
+                                        bool update_feedback) {
+   Handle<JSGlobalObject> global = isolate()->global_object();
+
++  // FuzzStream os;
++  // os << "[LoadGlobalIC::Load]: " << name << "\n";
++
+   if (IsString(*name)) {
+     // Look up in script context table.
+     Handle<String> str_name = Handle<String>::cast(name);
+@@ -1471,6 +1483,9 @@ MaybeHandle<Object> KeyedLoadIC::RuntimeLoad(Handle<Object> object,
+                                              Handle<Object> key) {
+   Handle<Object> result;
+
++  // FuzzStream os;
++  // os << "[KeyedLoadIC::RuntimeLoad]: " << key << "\n";
++
+   if (IsKeyedLoadIC()) {
+     ASSIGN_RETURN_ON_EXCEPTION(
+         isolate(), result, Runtime::GetObjectProperty(isolate(), object, key),
+@@ -1486,6 +1501,9 @@ MaybeHandle<Object> KeyedLoadIC::RuntimeLoad(Handle<Object> object,
+
+ MaybeHandle<Object> KeyedLoadIC::Load(Handle<Object> object,
+                                       Handle<Object> key) {
++  // FuzzStream os;
++  // os << "[KeyedLoadIC::Load]: " << key << "\n";
++
+   if (MigrateDeprecated(isolate(), object)) {
+     return RuntimeLoad(object, key);
+   }
+@@ -2646,6 +2664,10 @@ RUNTIME_FUNCTION(Runtime_LoadIC_Miss) {
+   // Runtime functions don't follow the IC's calling convention.
+   Handle<Object> receiver = args.at(0);
+   Handle<Name> key = args.at<Name>(1);
++
++  // FuzzStream os;
++  // os << "[Runtime_LoadIC_Miss]: " << key << "\n";
++
+   int slot = args.tagged_index_value_at(2);
+   Handle<FeedbackVector> vector = args.at<FeedbackVector>(3);
+   FeedbackSlot vector_slot = FeedbackVector::ToSlot(slot);
+@@ -2680,6 +2702,16 @@ RUNTIME_FUNCTION(Runtime_LoadNoFeedbackIC_Miss) {
+   // Runtime functions don't follow the IC's calling convention.
+   Handle<Object> receiver = args.at(0);
+   Handle<Name> key = args.at<Name>(1);
++
++  // FuzzStream os;
++  // os << "[Runtime_LoadNoFeedbackIC_Miss]: " << key << "\n";
++
++  // base::ScopedVector<char> name_buffer(100);
++  // key->NameShortPrint(name_buffer);
++  // if (strcmp(name_buffer.begin(), "obj") == 0) {
++  //   os << "THIS IS obj!!\n";
++  // }
++
+   int slot_kind = args.smi_value_at(2);
+   FeedbackSlotKind kind = static_cast<FeedbackSlotKind>(slot_kind);
+
+@@ -2700,6 +2732,9 @@ RUNTIME_FUNCTION(Runtime_LoadWithReceiverNoFeedbackIC_Miss) {
+   Handle<Object> object = args.at(1);
+   Handle<Name> key = args.at<Name>(2);
+
++  // FuzzStream os;
++  // os << "[Runtime_LoadWithReceiverNoFeedbackIC_Miss]: " << key << "\n";
++
+   Handle<FeedbackVector> vector = Handle<FeedbackVector>();
+   FeedbackSlot vector_slot = FeedbackSlot::Invalid();
+   LoadIC ic(isolate, vector, vector_slot, FeedbackSlotKind::kLoadProperty);
+@@ -2713,6 +2748,10 @@ RUNTIME_FUNCTION(Runtime_LoadGlobalIC_Miss) {
+   // Runtime functions don't follow the IC's calling convention.
+   Handle<JSGlobalObject> global = isolate->global_object();
+   Handle<String> name = args.at<String>(0);
++
++  // FuzzStream os;
++  // os << "[Runtime_LoadGlobalIC_Miss]: " << name << "\n";
++
+   int slot = args.tagged_index_value_at(1);
+   Handle<HeapObject> maybe_vector = args.at<HeapObject>(2);
+   int typeof_value = args.smi_value_at(3);
+@@ -2741,6 +2780,9 @@ RUNTIME_FUNCTION(Runtime_LoadGlobalIC_Slow) {
+   DCHECK_EQ(3, args.length());
+   Handle<String> name = args.at<String>(0);
+
++  // FuzzStream os;
++  // os << "[Runtime_LoadGlobalIC_Slow]: " << name << "\n";
++
+   int slot = args.tagged_index_value_at(1);
+   Handle<FeedbackVector> vector = args.at<FeedbackVector>(2);
+   FeedbackSlot vector_slot = FeedbackVector::ToSlot(slot);
+@@ -2759,6 +2801,10 @@ RUNTIME_FUNCTION(Runtime_LoadWithReceiverIC_Miss) {
+   Handle<Object> receiver = args.at(0);
+   Handle<Object> object = args.at(1);
+   Handle<Name> key = args.at<Name>(2);
++
++  // FuzzStream os;
++  // os << "[Runtime_LoadWithReceiverIC_Miss]: " << key << "\n";
++
+   int slot = args.tagged_index_value_at(3);
+   Handle<FeedbackVector> vector = args.at<FeedbackVector>(4);
+   FeedbackSlot vector_slot = FeedbackVector::ToSlot(slot);
+@@ -3388,6 +3434,11 @@ RUNTIME_FUNCTION(Runtime_LoadPropertyWithInterceptor) {
+   HandleScope scope(isolate);
+   DCHECK_EQ(5, args.length());
+   Handle<Name> name = args.at<Name>(0);
++
++  // LOG!!!
++  FuzzStream os;
++  os << "[Runtime_LoadPropertyWithInterceptor]: " << name << "\n";
++
+   Handle<Object> receiver = args.at(1);
+   Handle<JSObject> holder = args.at<JSObject>(2);
+
+@@ -3497,6 +3548,10 @@ RUNTIME_FUNCTION(Runtime_LoadElementWithInterceptor) {
+   DCHECK_GE(args.smi_value_at(1), 0);
+   uint32_t index = args.smi_value_at(1);
+
++  // LOG!!!
++  FuzzStream os;
++  os << "[Runtime_LoadElementWithInterceptor]: " << "\n";
++
+   Handle<InterceptorInfo> interceptor(receiver->GetIndexedInterceptor(),
+                                       isolate);
+   PropertyCallbackArguments arguments(isolate, interceptor->data(), *receiver,
+diff --git a/src/init/bootstrapper.cc b/src/init/bootstrapper.cc
+index 2beaf45b14..5d4c74c441 100644
+--- a/src/init/bootstrapper.cc
++++ b/src/init/bootstrapper.cc
+@@ -5899,6 +5899,10 @@ bool Genesis::InstallABunchOfRandomThings() {
+     native_context()->set_global_eval_fun(*eval);
+   }
+
++  // Install Global.log for tainting messages
++  InstallFunctionWithBuiltinId(isolate(), global_object, "log",
++                               Builtin::kGlobalLog, 1, false);
++
+   // Install Global.isFinite
+   InstallFunctionWithBuiltinId(isolate(), global_object, "isFinite",
+                                Builtin::kGlobalIsFinite, 1, true);
+diff --git a/src/objects/lookup-inl.h b/src/objects/lookup-inl.h
+index da1e593625..0e90e46b9a 100644
+--- a/src/objects/lookup-inl.h
++++ b/src/objects/lookup-inl.h
+@@ -18,6 +18,7 @@
+ #include "src/objects/map-inl.h"
+ #include "src/objects/name-inl.h"
+ #include "src/objects/objects-inl.h"
++#include "src/utils/ostreams.h"
+
+ namespace v8 {
+ namespace internal {
+@@ -74,6 +75,15 @@ LookupIterator::LookupIterator(Isolate* isolate, Handle<Object> receiver,
+       receiver_(receiver),
+       lookup_start_object_(lookup_start_object),
+       index_(index) {
++
++  // FuzzStream os;
++  // os << "[LookupIterator]: ";
++  // if (!name_.is_null()) {
++  //   os << name_;
++  // }
++
++  // os << "=CTOR=\n";
++
+   if (IsElement()) {
+     // If we're not looking at a TypedArray, we will need the key represented
+     // as an internalized string.
+diff --git a/src/objects/lookup.cc b/src/objects/lookup.cc
+index a5fd238767..8aba25a353 100644
+--- a/src/objects/lookup.cc
++++ b/src/objects/lookup.cc
+@@ -111,6 +111,7 @@ void LookupIterator::NextInternal(Tagged<Map> map, Tagged<JSReceiver> holder) {
+     holder = maybe_holder;
+     map = holder->map(isolate_);
+     state_ = LookupInHolder<is_element>(map, holder);
++    checked_prototype_ = true;
+   } while (!IsFound());
+
+   holder_ = handle(holder, isolate_);
+diff --git a/src/objects/lookup.h b/src/objects/lookup.h
+index 4ee8b47f68..9a47ae6b35 100644
+--- a/src/objects/lookup.h
++++ b/src/objects/lookup.h
+@@ -12,6 +12,7 @@
+ #include "src/objects/js-objects.h"
+ #include "src/objects/map.h"
+ #include "src/objects/objects.h"
++#include "src/utils/ostreams.h"
+
+ #if V8_ENABLE_WEBASSEMBLY
+ #include "src/wasm/value-type.h"
+@@ -132,11 +133,35 @@ class V8_EXPORT_PRIVATE LookupIterator final {
+
+   inline bool IsPrivateName() const;
+
+-  bool IsFound() const { return state_ != NOT_FOUND; }
++  bool IsFound() const {
++    // if (state_ == NOT_FOUND) {
++    //   FuzzStream os;
++    //   os << "[LookupIterator::IsFound] NOT FOUND: ";
++    //   if (!name_.is_null()) {
++    //     os << name_;
++    //   }
++
++    //   os << "\n";
++    // }
++
++    return state_ != NOT_FOUND;
++  }
++  bool CheckedPrototype() const {
++    return checked_prototype_;
++  }
++
+   void Next();
+   void NotFound() {
+     has_property_ = false;
+     state_ = NOT_FOUND;
++
++    // FuzzStream os;
++    // os << "[LookupIterator::NotFound] NOT FOUND: ";
++    // if (!name_.is_null()) {
++    //   os << name_;
++    // }
++
++    // os << "=INTERNAL=\n";
+   }
+
+   Heap* heap() const { return isolate_->heap(); }
+@@ -313,6 +338,7 @@ class V8_EXPORT_PRIVATE LookupIterator final {
+   // HolderIsReceiverOrHiddenPrototype.
+   const Configuration configuration_;
+   State state_ = NOT_FOUND;
++  bool checked_prototype_ = false;
+   bool has_property_ = false;
+   InterceptorState interceptor_state_ = InterceptorState::kUninitialized;
+   PropertyDetails property_details_ = PropertyDetails::Empty();
+diff --git a/src/runtime/runtime-object.cc b/src/runtime/runtime-object.cc
+index 770f8efa8f..9710f53e44 100644
+--- a/src/runtime/runtime-object.cc
++++ b/src/runtime/runtime-object.cc
+@@ -18,6 +18,7 @@
+ #include "src/objects/property-details.h"
+ #include "src/objects/swiss-name-dictionary-inl.h"
+ #include "src/runtime/runtime.h"
++#include "src/utils/ostreams.h"
+
+ namespace v8 {
+ namespace internal {
+@@ -39,6 +40,15 @@ MaybeHandle<Object> Runtime::GetObjectProperty(
+   LookupIterator it =
+       LookupIterator(isolate, receiver, lookup_key, lookup_start_object);
+
++  if (!it.IsFound() && it.CheckedPrototype()) {
++    // Changed by mshc
++    // LOG!!!
++    FuzzStream os;
++    os << "[Runtime::GetObjectProperty] NOT FOUND: " << key;
++    os << "\n";
++  }
++
++
+   MaybeHandle<Object> result = Object::GetProperty(&it);
+   if (result.is_null()) {
+     return result;
+@@ -777,6 +787,9 @@ RUNTIME_FUNCTION(Runtime_GetProperty) {
+     receiver_obj = args.at<Object>(2);
+   }
+
++  // FuzzStream os;
++  // os << "[Runtime_GetProperty]: " << key_obj << "\n";
++
+   // Fast cases for getting named properties of the lookup_start_obj JSObject
+   // itself.
+   //
+diff --git a/src/utils/ostreams.cc b/src/utils/ostreams.cc
+index 36a8080c8b..b0de24db16 100644
+--- a/src/utils/ostreams.cc
++++ b/src/utils/ostreams.cc
+@@ -5,6 +5,9 @@
+ #include "src/utils/ostreams.h"
+
+ #include <cinttypes>
++#include <unistd.h>
++#include <fcntl.h>
++
+
+ #include "src/base/lazy-instance.h"
+ #include "src/objects/string.h"
+@@ -114,9 +117,57 @@ std::streamsize AndroidLogStream::xsputn(const char* s, std::streamsize n) {
+ }
+ #endif
+
++fdoutbuf::fdoutbuf(int fd) :fd(fd) {
++  if (this->fd == -1) {
++    std::perror("Error opening taint.log");
++    std::exit(1);
++  }
++}
++
++fdoutbuf::int_type fdoutbuf::overflow(int_type c) {
++  if (c != EOF) {
++    char z = c;
++    if (write(fd, &z, 1) != 1) {
++      return EOF;
++    }
++  }
++  return c;
++}
++
++std::streamsize fdoutbuf::xsputn(const char* s, std::streamsize num) {
++  return write(fd, s, num);
++}
++
+ DEFINE_LAZY_LEAKY_OBJECT_GETTER(base::RecursiveMutex,
+                                 StdoutStream::GetStdoutMutex)
+
++DEFINE_LAZY_LEAKY_OBJECT_GETTER(base::RecursiveMutex,
++                                FuzzStream::GetFuzzMutex)
++
++int FuzzStream::file = -1;
++FuzzStream::FuzzStream() {
++  buf = new fdoutbuf(getFile());
++  this->init(buf);
++}
++
++FuzzStream::~FuzzStream() {
++  delete buf;
++}
++
++int FuzzStream::getFile() {
++if (file < 0) {
++    const std::string folderPath = "/src/_analysis/tmp/";
++    int count = 1;
++    do
++    {
++      std::string filePath = folderPath + "taint_" + std::to_string(count++) + ".log";
++      file = open(filePath.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0644);
++    } while (file < 0);
++  }
++
++  return file;
++}
++
+ namespace {
+
+ // Locale-independent predicates.
+diff --git a/src/utils/ostreams.h b/src/utils/ostreams.h
+index 0b5bca95ea..064225bd34 100644
+--- a/src/utils/ostreams.h
++++ b/src/utils/ostreams.h
+@@ -98,6 +98,32 @@ class StdoutStream : public OFStream {
+
+   base::RecursiveMutexGuard mutex_guard_{GetStdoutMutex()};
+ };
++
++class fdoutbuf : public std::streambuf {
++ public:
++  fdoutbuf(int fd);
++
++ protected:
++  virtual int_type overflow(int_type c) override;
++  virtual std::streamsize xsputn(const char* s, std::streamsize num) override;
++
++ private:
++  int fd;
++};
++
++class FuzzStream : public std::ostream {
++ public:
++  FuzzStream();
++  virtual ~FuzzStream();
++
++ private:
++  static int file;
++  static int getFile();
++  static V8_EXPORT_PRIVATE base::RecursiveMutex* GetFuzzMutex();
++
++  base::RecursiveMutexGuard mutex_guard_{GetFuzzMutex()};
++  fdoutbuf* buf;
++};
+ #endif
+
+ class StderrStream : public OFStream {
