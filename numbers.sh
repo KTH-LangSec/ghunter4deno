@@ -80,10 +80,6 @@ gadget_candidates=$((sinks_reached_final+tests_timed_out_final+tests_panicked_fi
 echo
 echo '-------------------------------------------------------------------------'
 echo
-node check-gcs.mjs _aggregate/s2s.sarif _aggregate/crashes.sarif
-echo
-echo '-------------------------------------------------------------------------'
-echo
 echo "      Tests completed              : $tests_completed"
 echo
 echo "  Test property pairs (unfiltered) : $test_property_pairs"
