@@ -133,6 +133,14 @@ To run unexpected termination analysis you must have previously run source-to-si
    This requires providing the index of a previous source-to-sink analysis for the chosen Deno project; the index is the `X` in `_analysis/analysis-X`.
    For example, if you previously run source-to-sink analysis for Deno core, `./analyze.sh 5 20 core 1`.
 
+## Package analysis
+
+We provide a small set of examples of using GHunter for analyzing packages. The covered packages can be found in the `pkgs/` directory.
+
+To analyze all packages, run `./run_pkgs.sh`, optionally with a number of workers (default 5) and test timeout (default 20s). This will run the a full analysis and produce SARIF files for each package and analysis type in the `_analysis/` directory.
+
+To analyze individual packages follow the related instructions above but make sure to use one of the available "package targets".
+
 ## Additional content
 
 This repository also contains:

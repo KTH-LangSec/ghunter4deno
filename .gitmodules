@@ -10,3 +10,9 @@
 [submodule "deno_std"]
 	path = deno_std
 	url = https://github.com/denoland/deno_std.git
+[submodule "pkgs/fresh"]
+	path = pkgs/fresh
+	url = https://github.com/denoland/fresh
+[submodule "pkgs/postgres"]
+	path = pkgs/postgres
+	url = https://github.com/denodrivers/postgres

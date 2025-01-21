@@ -17,12 +17,19 @@ case "$3" in
 "std")
   tests_dir='./deno_std/'
   ;;
+"fresh")
+  tests_dir='./pkgs/fresh/'
+  ;;
+"postgres")
+  tests_dir='./pkgs/postgres/'
+  ;;
 "basic-test")
   tests_dir='./deno/cli/tests/unit/dir_test.ts'
   ;;
 *)
   echo 'usage: ./analyze.sh [# of workers] [test timeout in seconds] [target] [analysis index]'
   echo 'possible targets: "core", "node", "std", "basic-test"'
+  echo ' package targets: "fresh", "postgres"'
   echo 'analysis index only needed when running unexpected-termination analysis, in which case it must be the index of a "_analysis/analysis-x" folder'
   exit 1
 esac
